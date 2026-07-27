@@ -2,7 +2,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session, send_file
 import pandas as pd
 import numpy as np
-import csv
+import sqlite3
 import pickle
 import matplotlib.pyplot as plt
 import os
@@ -18,6 +18,28 @@ with open("accuracy.txt", "r") as f:
 #Create FLASK App
 app = Flask(__name__)
 app.secret_key = "supersecretkey"
+
+# Create SQLite Database Automatically
+def create_database():
+    conn = sqlite3.connect("student.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS predictions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        study_hours REAL,
+        attendance REAL,
+        previous_score REAL,
+        predicted_score REAL,
+        category TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+# Create the database and table when the application starts
+create_database()
 
 #HomePage
 @app.route("/")
@@ -46,9 +68,24 @@ def dashboard():
     if not session.get("admin"):
         return redirect(url_for("admin"))
     try:
-        data = pd.read_csv("results.csv")
-        records = data.values.tolist()
-    except:
+        conn = sqlite3.connect("student.db")
+        cursor = conn.cursor()
+
+        cursor.execute("""
+        SELECT study_hours,
+           attendance,
+           previous_score,
+           predicted_score,
+           category
+        FROM predictions
+        """)
+
+        records = cursor.fetchall()
+
+        conn.close()
+
+    except Exception as e:
+        print(e)
         records = []
     return render_template("dashboard.html", records=records)
 
@@ -57,7 +94,7 @@ def dashboard():
 def download():
     if not session.get("admin"):
         return redirect(url_for("admin"))
-    return send_file("results.csv", as_attachment=True)
+    return send_file("student.db", as_attachment=True)
 
 #Logout Page
 @app.route("/logout")
@@ -92,7 +129,7 @@ def predict():
         if previous > 100:
             return render_template("index.html", error="Previous score cannot exceed 100.")
         
-        #Predction
+        #Prediction
         input_data = pd.DataFrame(
             [[hours, attendance, previous]],
             columns=["hours_studied", "attendance", "previous_score"]
@@ -130,10 +167,19 @@ def predict():
         else:
             category = "Needs Improvement"
                     
-        #Save User Outputs in CSV File
-        with open("results.csv", "a", newline="") as file:
-            writer = csv.writer(file);
-            writer.writerow([hours, attendance, previous, final_result])
+        # Save prediction into SQLite database
+        
+        conn = sqlite3.connect("student.db")
+        cursor = conn.cursor()
+
+        cursor.execute("""
+        INSERT INTO predictions
+        (study_hours, attendance, previous_score, predicted_score, category)
+        VALUES (?, ?, ?, ?, ?)
+        """, (hours, attendance, previous, final_result, category))
+
+        conn.commit()
+        conn.close()
             
         return render_template("index.html",
                        result=final_result,
@@ -144,7 +190,8 @@ def predict():
                        previous=previous,
                        graph=True)
     
-    except:
+    except Exception as e:
+        print(e)
         return render_template("index.html", error="Invalid input, Please enter a valid numbers.")
     
 #RUN APP
